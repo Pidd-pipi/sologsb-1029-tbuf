@@ -122,6 +122,35 @@ button, input, textarea { font: inherit; }
 .segmented button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 5px rgb(0 0 0 / .09); font-weight: 700; }
 .empty-state { text-align: center; padding: 36px 20px; color: var(--muted); }
 .empty-state strong { display: block; color: var(--text); margin-bottom: 7px; }
+
+/* 设备交接 */
+.handoff-panel { border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--line)); }
+.handoff-device { display: flex; gap: 8px; margin: 12px 0 4px; }
+.handoff-name { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 11px; padding: 9px 11px; background: var(--card); color: var(--text); }
+.handoff-id { margin: 0 0 12px; font-size: .62rem; color: var(--muted); word-break: break-all; }
+.handoff-code-box textarea, .handoff-input { width: 100%; margin-top: 9px; border: 1px dashed var(--line); border-radius: 12px; padding: 10px; background: color-mix(in srgb, var(--soft) 45%, var(--card)); color: var(--text); font-size: .66rem; line-height: 1.5; word-break: break-all; resize: vertical; }
+.handoff-code-box textarea { min-height: 86px; }
+.handoff-input { min-height: 74px; border-style: solid; }
+.handoff-actions { display: grid; grid-template-columns: 1.4fr 1fr; gap: 8px; margin-top: 9px; }
+.handoff-preview { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.conflict-card { border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line)); border-radius: 14px; padding: 11px; margin-bottom: 10px; background: color-mix(in srgb, var(--danger) 5%, var(--card)); }
+.conflict-title { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; font-size: .78rem; }
+.conflict-title span { color: var(--muted); font-size: .66rem; }
+.conflict-option { display: grid; grid-template-columns: auto 1fr; grid-template-areas: "radio meta" "radio value"; gap: 1px 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; margin-bottom: 7px; cursor: pointer; background: var(--card); }
+.conflict-option.chosen { border-color: var(--primary); background: var(--soft); }
+.conflict-option input { grid-area: radio; align-self: center; }
+.conflict-meta { grid-area: meta; font-size: .66rem; color: var(--muted); font-weight: 700; }
+.conflict-value { grid-area: value; font-size: .72rem; line-height: 1.5; word-break: break-word; }
+.merge-summary { margin: 0; padding-left: 18px; font-size: .74rem; line-height: 1.9; color: var(--text); }
+.handoff-notice { margin: 6px 0; font-size: .68rem; line-height: 1.55; color: #8a6400; }
+[data-theme='dark'] .handoff-notice { color: #e4c779; }
+.merge-error strong { display: block; color: var(--danger); font-size: .84rem; margin-bottom: 6px; }
+.merge-error p { margin: 0 0 12px; color: var(--muted); font-size: .72rem; line-height: 1.6; }
+.result-tags { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.tag { border-radius: 999px; padding: 3px 8px; font-size: .58rem; font-weight: 700; white-space: nowrap; }
+.tag-recompute { background: #fff2dc; color: #935b00; }
+.tag-stale { background: #fde8e8; color: var(--danger); }
+[data-theme='dark'] .tag-recompute { background: #3d2f12; color: #e4c779; }
 @media (min-width: 600px) {
   body { padding: 18px 0; }
   .app-shell { min-height: calc(100dvh - 36px); border-radius: 28px; }

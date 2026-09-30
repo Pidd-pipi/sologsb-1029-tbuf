@@ -1,7 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { courseForLesson, exportRecords, lessonById, persist, saveAttempt, setDownloaded, state, updateTokenClassification } from './store';
-import type { ErrorCategory, Lesson, PracticeAttempt, PracticeView } from './types';
+import {
+  courseForLesson,
+  exportRecords,
+  lessonById,
+  persist,
+  saveAnswerDraft,
+  markActiveSentence,
+  saveAttempt,
+  persistTeacherFeedback,
+  setDownloaded,
+  state,
+  updateTokenClassification,
+  renameDevice,
+  exportHandoff,
+  importHandoff,
+  previewImport,
+  pendingChangeCount
+} from './store';
+import type { ConflictSide, ErrorCategory, ImportConflict, ImportResult, Lesson, PracticeAttempt, PracticeView } from './types';
 import { compareSentence, scoreAttempt, segmentText } from './utils';
 
 const view = ref<PracticeView>(state.activeLessonId ? 'practice' : 'library');
@@ -14,6 +31,16 @@ const segmentEnd = ref(1);
 const teacherAttemptId = ref(state.attempts[0]?.id ?? '');
 const teacherDraft = ref(state.attempts[0]?.teacherFeedback ?? '');
 let toastTimer = 0;
+
+// 设备交接面板状态
+const deviceNameDraft = ref(state.deviceName);
+const handoffCode = ref('');
+const importCode = ref('');
+const showCode = ref(false);
+const importPreviewResult = ref<ImportResult | null>(null);
+const importResolutions = ref<Record<string, ConflictSide>>({});
+const importing = ref(false);
+const pendingPreviewCode = ref('');
 
 const activeLesson = computed(() => lessonById(state.activeLessonId));
 const activeCourse = computed(() => activeLesson.value ? courseForLesson(activeLesson.value.id) : undefined);
@@ -38,6 +65,8 @@ const resultSentence = computed(() => resultAttempt.value?.sentenceAttempts[sele
 const teacherAttempt = computed(() => state.attempts.find((attempt) => attempt.id === teacherAttemptId.value));
 const totalWords = computed(() => state.attempts.flatMap((attempt) => attempt.sentenceAttempts).flatMap((item) => item.tokens).length);
 const correctedWords = computed(() => state.attempts.flatMap((attempt) => attempt.sentenceAttempts).flatMap((item) => item.tokens).filter((token) => !token.correct && token.category !== 'unclassified').length);
+const pendingCount = computed(() => pendingChangeCount());
+const unresolvedCount = computed(() => (importPreviewResult.value?.conflicts ?? []).filter((conflict) => !importResolutions.value[conflict.id]).length);
 
 const categoryOptions: Array<{ value: ErrorCategory; label: string }> = [
   { value: 'unclassified', label: '未分类' },
@@ -54,15 +83,12 @@ watch(currentSentence, (sentence) => {
   segmentEnd.value = sentence ? Math.max(0, segmentText(sentence.text).length - 1) : 0;
 }, { immediate: true });
 
+// 答案写入带设备号+序号的改动日志，未导出前的连续编辑合并为同一条。
 watch(currentAnswer, (value) => {
   const lesson = activeLesson.value;
   const sentence = currentSentence.value;
   if (!lesson || !sentence) return;
-  const progress = state.progress[lesson.id] ?? { answers: {}, activeSentenceId: sentence.id, updatedAt: new Date().toISOString() };
-  progress.answers[sentence.id] = value;
-  progress.activeSentenceId = sentence.id;
-  progress.updatedAt = new Date().toISOString();
-  state.progress[lesson.id] = progress;
+  saveAnswerDraft(lesson.id, sentence.id, value);
 });
 
 watch(activeLesson, (lesson) => {
@@ -72,6 +98,7 @@ watch(activeLesson, (lesson) => {
   const progress = state.progress[lesson.id] ?? { answers: {}, activeSentenceId: lesson.sentences[0].id, updatedAt: new Date().toISOString() };
   if (!lesson.sentences.some((sentence) => sentence.id === progress.activeSentenceId)) progress.activeSentenceId = lesson.sentences[0].id;
   state.progress[lesson.id] = progress;
+  markActiveSentence(lesson.id, progress.activeSentenceId);
   state.activeSentenceId = progress.activeSentenceId;
   currentAnswer.value = progress.answers[state.activeSentenceId] ?? '';
 });
@@ -83,7 +110,7 @@ watch(teacherAttemptId, (id) => {
 function notify(message: string) {
   toast.value = message;
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => { toast.value = ''; }, 2400);
+  toastTimer = window.setTimeout(() => { toast.value = ''; }, 2600);
 }
 
 function startLesson(lesson: Lesson) {
@@ -101,12 +128,8 @@ function goToSentence(index: number) {
   if (!lesson || !lesson.sentences[index]) return;
   const target = lesson.sentences[index];
   state.activeSentenceId = target.id;
-  const progress = state.progress[lesson.id];
-  if (progress) {
-    progress.activeSentenceId = target.id;
-    progress.updatedAt = new Date().toISOString();
-  }
-  currentAnswer.value = progress?.answers[target.id] ?? '';
+  markActiveSentence(lesson.id, target.id);
+  currentAnswer.value = state.progress[lesson.id]?.answers[target.id] ?? '';
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -177,15 +200,15 @@ function selectResultSentence(index: number) {
   syncSegment();
 }
 
-function saveClassification(attemptId: string, sentenceId: string, tokenIndex: number, category: ErrorCategory, reason: string) {
-  updateTokenClassification(attemptId, sentenceId, tokenIndex, { category, reason });
+function saveClassification(attemptId: string, lessonId: string, sentenceId: string, tokenIndex: number, category: ErrorCategory, reason: string) {
+  updateTokenClassification(attemptId, lessonId, sentenceId, tokenIndex, { category, reason });
   persist();
 }
 
 function saveTeacherFeedback() {
   const attempt = teacherAttempt.value;
   if (!attempt) return;
-  attempt.teacherFeedback = teacherDraft.value.trim();
+  persistTeacherFeedback(attempt.id, teacherDraft.value);
   persist();
   notify('教师反馈已保存');
 }
@@ -196,6 +219,95 @@ function toggleTheme() {
 
 function changeFont(delta: number) {
   state.fontScale = Math.min(1.25, Math.max(0.85, Number((state.fontScale + delta).toFixed(2))));
+}
+
+/* ---------------- 设备交接 ---------------- */
+
+function saveDeviceName() {
+  renameDevice(deviceNameDraft.value);
+  persist();
+  notify('设备名称已保存');
+}
+
+function buildHandoff() {
+  handoffCode.value = exportHandoff();
+  showCode.value = true;
+  notify(pendingChangeCount() === 0 ? '交接码已生成（包含此前全部改动）' : '交接码已生成');
+}
+
+async function copyHandoff() {
+  if (!handoffCode.value) return;
+  try {
+    await navigator.clipboard.writeText(handoffCode.value);
+    notify('交接码已复制');
+  } catch {
+    notify('请长按文本手动复制');
+  }
+}
+
+function previewIncoming() {
+  const code = importCode.value.trim();
+  if (!code) {
+    notify('请先粘贴另一台设备的交接码');
+    return;
+  }
+  const result = previewImport(state, code);
+  importPreviewResult.value = result;
+  importResolutions.value = {};
+  pendingPreviewCode.value = code;
+  if (result.ok) {
+    notify('预览完成，没有冲突，可以合并');
+  } else if (result.errorCode === 'unresolved') {
+    notify(`发现 ${result.conflicts.length} 处两边都改过的内容，请逐条选择`);
+  } else {
+    notify(result.errorMessage ?? '交接码无法使用');
+  }
+}
+
+function pickResolution(conflict: ImportConflict, side: ConflictSide) {
+  importResolutions.value[conflict.id] = side;
+}
+
+async function confirmImport() {
+  if (!pendingPreviewCode.value || !importPreviewResult.value) return;
+  if (importPreviewResult.value.errorCode === 'unresolved' && unresolvedCount.value > 0) {
+    notify(`还有 ${unresolvedCount.value} 处冲突未选择`);
+    return;
+  }
+  importing.value = true;
+  const outcome = await importHandoff(pendingPreviewCode.value, importResolutions.value);
+  importing.value = false;
+  if (outcome.ok) {
+    const stats = outcome.result.stats;
+    const parts: string[] = [];
+    if (stats.attempts) parts.push(`${stats.attempts} 次作答`);
+    if (stats.answers) parts.push(`${stats.answers} 句草稿`);
+    if (stats.classifications) parts.push(`${stats.classifications} 条错因`);
+    if (stats.feedback) parts.push(`${stats.feedback} 条反馈`);
+    if (stats.recomputedSentences) parts.push(`${stats.recomputedSentences} 句错词已按新课程重算`);
+    notify(parts.length ? `合并完成：${parts.join('、')}` : '合并完成，没有新的改动');
+    importCode.value = '';
+    importPreviewResult.value = null;
+    pendingPreviewCode.value = '';
+  } else {
+    notify(outcome.message);
+    // 容量不足/写入失败时保留预览与选择，用户整理空间后直接重试。
+    if (outcome.result.errorCode !== 'capacity' && outcome.result.errorCode !== 'write-failed' && outcome.result.errorCode !== 'unresolved') {
+      importPreviewResult.value = null;
+    }
+  }
+}
+
+function dismissImportPreview() {
+  importPreviewResult.value = null;
+  pendingPreviewCode.value = '';
+  importResolutions.value = {};
+}
+
+function conflictTitle(conflict: ImportConflict): string {
+  if (conflict.kind === 'answerDraft') return `同一句草稿冲突 · 第 ${conflict.sentenceOrdinal} 句`;
+  if (conflict.kind === 'tokenClass') return `错词分类冲突 · 第 ${conflict.sentenceOrdinal} 句「${conflict.expectedWord}」`;
+  return '教师反馈冲突';
 }
 
 function downloadRecords() {
@@ -268,6 +380,89 @@ onBeforeUnmount(() => {
           <span>{{ online ? '● 在线 · 数据已保存到本机' : '● 离线模式 · 可继续已下载课程' }}</span>
           <span>{{ online ? '本地优先存储' : '恢复网络后继续保存' }}</span>
         </div>
+
+        <section class="panel handoff-panel">
+          <div class="detail-head">
+            <div>
+              <h3>设备交接</h3>
+              <p>手机与平板轮流离线练习时，用交接码合并答案、错因和教师反馈。改动按设备号 + 序号交接，整份覆盖不会再互相带走。</p>
+            </div>
+            <span class="status-chip">{{ pendingCount }} 条未交接</span>
+          </div>
+
+          <div class="handoff-device">
+            <input v-model="deviceNameDraft" class="handoff-name" aria-label="本机设备名称" placeholder="给本机起个名字，如 妈妈的手机" />
+            <var-button size="small" variant="outline" @click="saveDeviceName">改名</var-button>
+          </div>
+          <p class="handoff-id">本机设备号：{{ state.deviceId }}</p>
+
+          <var-button block type="primary" @click="buildHandoff">生成交接码</var-button>
+          <div v-if="showCode && handoffCode" class="handoff-code-box">
+            <textarea :value="handoffCode" readonly aria-label="本机交接码" @focus="($event.target as HTMLTextAreaElement).select()"></textarea>
+            <var-button block size="small" variant="outline" style="margin-top: 8px" @click="copyHandoff">复制交接码</var-button>
+          </div>
+
+          <div class="dictation-label"><strong>在另一台设备合并</strong><span>重复导入不会重复生效</span></div>
+          <textarea v-model="importCode" class="handoff-input" aria-label="粘贴另一台设备的交接码" placeholder="把另一台设备生成的交接码粘贴到这里…"></textarea>
+          <div class="handoff-actions">
+            <var-button block type="primary" variant="outline" @click="previewIncoming">预览合并</var-button>
+            <var-button block type="default" variant="outline" @click="importCode = ''">清空</var-button>
+          </div>
+
+          <div v-if="importPreviewResult" class="handoff-preview">
+            <template v-if="importPreviewResult.errorCode === 'unresolved'">
+              <div class="dictation-label">
+                <strong>检测到 {{ importPreviewResult.conflicts.length }} 处冲突</strong>
+                <span>两边都改过，请逐条选择保留哪份</span>
+              </div>
+              <div v-for="conflict in importPreviewResult.conflicts" :key="conflict.id" class="conflict-card">
+                <div class="conflict-title">
+                  <strong>{{ conflictTitle(conflict) }}</strong>
+                  <span>{{ conflict.lessonTitle }}</span>
+                </div>
+                <label class="conflict-option" :class="{ chosen: importResolutions[conflict.id] === 'local' }">
+                  <input type="radio" :name="conflict.id" value="local" @change="pickResolution(conflict, 'local')" />
+                  <span class="conflict-meta">{{ conflict.localDeviceName }}（本机）</span>
+                  <span class="conflict-value">{{ conflict.localLabel }}</span>
+                </label>
+                <label class="conflict-option" :class="{ chosen: importResolutions[conflict.id] === 'incoming' }">
+                  <input type="radio" :name="conflict.id" value="incoming" @change="pickResolution(conflict, 'incoming')" />
+                  <span class="conflict-meta">{{ conflict.incomingDeviceName }}（对端）</span>
+                  <span class="conflict-value">{{ conflict.incomingLabel }}</span>
+                </label>
+              </div>
+              <p v-for="notice in importPreviewResult.notices" :key="notice" class="handoff-notice">· {{ notice }}</p>
+              <var-button block type="primary" :disabled="unresolvedCount > 0" @click="confirmImport">
+                {{ unresolvedCount > 0 ? `还有 ${unresolvedCount} 处待选择` : '按选择合并' }}
+              </var-button>
+              <var-button block type="default" variant="outline" style="margin-top: 8px" @click="dismissImportPreview">取消</var-button>
+            </template>
+
+            <template v-else-if="importPreviewResult.ok">
+              <div class="dictation-label"><strong>可以合并</strong><span>不同句子已自动并合</span></div>
+              <ul class="merge-summary">
+                <li v-if="importPreviewResult.stats.attempts">新增 {{ importPreviewResult.stats.attempts }} 次作答</li>
+                <li v-if="importPreviewResult.stats.answers">并入 {{ importPreviewResult.stats.answers }} 句草稿答案</li>
+                <li v-if="importPreviewResult.stats.classifications">并入 {{ importPreviewResult.stats.classifications }} 条错词分类</li>
+                <li v-if="importPreviewResult.stats.feedback">并入 {{ importPreviewResult.stats.feedback }} 条教师反馈</li>
+                <li v-if="importPreviewResult.stats.recomputedSentences">{{ importPreviewResult.stats.recomputedSentences }} 句错词随课程升级重算</li>
+                <li v-if="!Object.values(importPreviewResult.stats).some((value) => typeof value === 'number' && value > 0)">没有新的改动需要写入</li>
+              </ul>
+              <p v-for="notice in importPreviewResult.notices" :key="notice" class="handoff-notice">· {{ notice }}</p>
+              <var-button block type="primary" :loading="importing" @click="confirmImport">确认合并到本机</var-button>
+              <var-button block type="default" variant="outline" style="margin-top: 8px" @click="dismissImportPreview">取消</var-button>
+            </template>
+
+            <template v-else>
+              <div class="merge-error">
+                <strong>无法合并，原记录未改动</strong>
+                <p>{{ importPreviewResult.errorMessage }}</p>
+              </div>
+              <var-button block v-if="importPreviewResult.errorCode === 'capacity' || importPreviewResult.errorCode === 'write-failed'" type="primary" :loading="importing" @click="confirmImport">整理空间后重试</var-button>
+              <var-button block v-else type="default" variant="outline" @click="dismissImportPreview">我知道了</var-button>
+            </template>
+          </div>
+        </section>
 
         <div class="section-head">
           <h3>课程库</h3>
@@ -359,7 +554,11 @@ onBeforeUnmount(() => {
         <section v-if="resultSentence" class="panel token-panel">
           <div class="detail-head">
             <div><h3>第 {{ selectedResultSentence + 1 }} 句逐词结果</h3><p>{{ resultSentence.source }}</p></div>
-            <span class="history-score">{{ resultSentence.score }}%</span>
+            <div class="result-tags">
+              <span v-if="resultSentence.recomputed" class="tag tag-recompute">课程升级 · 已重算</span>
+              <span v-else-if="resultSentence.stale" class="tag tag-stale">原句已移除</span>
+              <span class="history-score">{{ resultSentence.score }}%</span>
+            </div>
           </div>
           <div class="word-list">
             <button v-for="token in resultSentence.tokens" :key="`${token.index}-${token.expected}-${token.actual}`" class="word-chip" :class="{ wrong: !token.correct }" :title="token.correct ? '点击重听' : `你的答案：${token.actual || '未输入'}`" @click="replay(token.expected || token.actual, 0.7)">
@@ -381,10 +580,10 @@ onBeforeUnmount(() => {
             <div v-for="token in resultSentence.tokens.filter((item) => !item.correct)" :key="`edit-${token.index}`" class="feedback-card">
               <strong>{{ token.expected || `多出的词：${token.actual}` }}</strong>
               <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; margin-top: 9px">
-                <select :value="token.category" @change="saveClassification(resultAttempt.id, resultSentence.sentenceId, token.index, ($event.target as HTMLSelectElement).value as ErrorCategory, token.reason)">
+                <select :value="token.category" @change="saveClassification(resultAttempt.id, resultAttempt.lessonId, resultSentence.sentenceId, token.index, ($event.target as HTMLSelectElement).value as ErrorCategory, token.reason)">
                   <option v-for="option in categoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
-                <input :value="token.reason" placeholder="记录原因，如连读、词尾未听清" @change="saveClassification(resultAttempt.id, resultSentence.sentenceId, token.index, token.category, ($event.target as HTMLInputElement).value)" />
+                <input :value="token.reason" placeholder="记录原因，如连读、词尾未听清" @change="saveClassification(resultAttempt.id, resultAttempt.lessonId, resultSentence.sentenceId, token.index, token.category, ($event.target as HTMLInputElement).value)" />
               </div>
             </div>
           </div>

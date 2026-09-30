@@ -1,8 +1,12 @@
 import type { Course, PersistedState } from './types';
+import { compareSentence, createDeviceId, lessonFingerprint, scoreAttempt, scoreSentence } from './utils';
+
+export const CURRENT_COURSE_VERSION = 3;
 
 export const demoCourses: Course[] = [
   {
     id: 'daily-life',
+    version: 3,
     title: '日常英语 · 机场与出行',
     description: '围绕值机、安检、问路和登机场景进行短句听写。',
     level: 'A2',
@@ -41,8 +45,9 @@ export const demoCourses: Course[] = [
   },
   {
     id: 'workplace',
+    version: 2,
     title: '职场英语 · 会议沟通',
-    description: '练习会议中的观点确认、追问和行动项复述。',
+    description: '练习会议中的观点确认、追问和行动项复述。v2 修订了行动项句子。',
     level: 'B1',
     accent: '#7a3dc4',
     lessons: [
@@ -64,51 +69,141 @@ export const demoCourses: Course[] = [
   }
 ];
 
-export const createInitialState = (): PersistedState => ({
-  schemaVersion: 1,
-  courses: structuredClone(demoCourses),
-  attempts: [
-    {
-      id: 'demo-attempt-1',
-      lessonId: 'airport-01',
-      lessonTitle: '办理值机',
-      courseTitle: '日常英语 · 机场与出行',
-      submittedAt: '2026-09-24T10:20:00.000Z',
-      score: 84,
-      teacherFeedback: '连读细节明显进步。注意 bags are 的词尾衔接，再听一遍第二句。',
-      sentenceAttempts: [
-        {
-          sentenceId: 'airport-01-s1',
-          source: 'I would like to check in for my flight to London.',
-          answer: 'I would like to check in for my flight to London',
-          score: 94,
-          tokens: [
-            { index: 0, expected: 'I', actual: 'I', correct: true, category: 'unclassified', reason: '' },
-            { index: 1, expected: 'would', actual: 'would', correct: true, category: 'unclassified', reason: '' },
-            { index: 2, expected: 'like', actual: 'like', correct: true, category: 'unclassified', reason: '' },
-            { index: 3, expected: 'to', actual: 'to', correct: true, category: 'unclassified', reason: '' },
-            { index: 4, expected: 'check', actual: 'check', correct: true, category: 'unclassified', reason: '' },
-            { index: 5, expected: 'in', actual: 'in', correct: true, category: 'unclassified', reason: '' },
-            { index: 6, expected: 'for', actual: 'for', correct: true, category: 'unclassified', reason: '' },
-            { index: 7, expected: 'my', actual: 'my', correct: true, category: 'unclassified', reason: '' },
-            { index: 8, expected: 'flight', actual: 'flight', correct: true, category: 'unclassified', reason: '' },
-            { index: 9, expected: 'to', actual: 'to', correct: true, category: 'unclassified', reason: '' },
-            { index: 10, expected: 'London', actual: 'London', correct: true, category: 'unclassified', reason: '' }
-          ]
-        }
-      ]
+/** 按当前课程表刷新课程内容（保留用户的下载标记），并补齐指纹。 */
+function refreshCourses(courses: Course[]): Course[] {
+  const downloads = new Map<string, boolean>();
+  for (const course of courses) {
+    for (const lesson of course.lessons) downloads.set(lesson.id, lesson.downloaded);
+  }
+  return structuredClone(demoCourses).map((course) => ({
+    ...course,
+    lessons: course.lessons.map((lesson) => ({ ...lesson, downloaded: downloads.get(lesson.id) ?? lesson.downloaded }))
+  }));
+}
+
+export function currentLessonHashes(courses: Course[]): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  for (const course of courses) {
+    for (const lesson of course.lessons) hashes[lesson.id] = lessonFingerprint(lesson);
+  }
+  return hashes;
+}
+
+export const createInitialState = (): PersistedState => {
+  const courses = structuredClone(demoCourses);
+  const lessonHashes = currentLessonHashes(courses);
+  return {
+    schemaVersion: 2,
+    deviceId: createDeviceId(),
+    deviceName: '本机',
+    deviceSeq: 0,
+    journal: [],
+    appliedSeq: {},
+    lastExportedSeq: {},
+    lessonHashes,
+    knownDevices: {},
+    courses,
+    attempts: [
+      {
+        id: 'demo-attempt-1',
+        lessonId: 'airport-01',
+        lessonTitle: '办理值机',
+        courseTitle: '日常英语 · 机场与出行',
+        submittedAt: '2026-09-24T10:20:00.000Z',
+        score: 84,
+        lessonHash: lessonHashes['airport-01'],
+        teacherFeedback: '连读细节明显进步。注意 bags are 的词尾衔接，再听一遍第二句。',
+        sentenceAttempts: [
+          {
+            sentenceId: 'airport-01-s1',
+            source: 'I would like to check in for my flight to London.',
+            answer: 'I would like to check in for my flight to London',
+            score: 94,
+            tokens: [
+              { index: 0, expected: 'I', actual: 'I', correct: true, category: 'unclassified', reason: '' },
+              { index: 1, expected: 'would', actual: 'would', correct: true, category: 'unclassified', reason: '' },
+              { index: 2, expected: 'like', actual: 'like', correct: true, category: 'unclassified', reason: '' },
+              { index: 3, expected: 'to', actual: 'to', correct: true, category: 'unclassified', reason: '' },
+              { index: 4, expected: 'check', actual: 'check', correct: true, category: 'unclassified', reason: '' },
+              { index: 5, expected: 'in', actual: 'in', correct: true, category: 'unclassified', reason: '' },
+              { index: 6, expected: 'for', actual: 'for', correct: true, category: 'unclassified', reason: '' },
+              { index: 7, expected: 'my', actual: 'my', correct: true, category: 'unclassified', reason: '' },
+              { index: 8, expected: 'flight', actual: 'flight', correct: true, category: 'unclassified', reason: '' },
+              { index: 9, expected: 'to', actual: 'to', correct: true, category: 'unclassified', reason: '' },
+              { index: 10, expected: 'London', actual: 'London', correct: true, category: 'unclassified', reason: '' }
+            ]
+          }
+        ]
+      }
+    ],
+    progress: {
+      'airport-01': {
+        answers: { 'airport-01-s1': 'I would like to check in for my flight to London' },
+        activeSentenceId: 'airport-01-s2',
+        updatedAt: '2026-09-24T10:10:00.000Z'
+      }
+    },
+    activeLessonId: '',
+    activeSentenceId: '',
+    theme: 'light',
+    fontScale: 1,
+    role: 'learner'
+  };
+};
+
+/**
+ * v1 → v2：兼容原有答案、进度、错词分类与教师反馈。
+ * 课程内容刷新到当前版本（保留下载标记）；受影响的旧错词用原答案重算；
+ * 找不到原句的作答标记为 stale 并保留。
+ */
+export function upgradeStateV1(old: unknown): PersistedState {
+  const legacy = old as PersistedState;
+  const fresh = createInitialState();
+  const courses = refreshCourses(Array.isArray(legacy.courses) ? legacy.courses : []);
+  const lessonHashes = currentLessonHashes(courses);
+  const lessonIndex = new Map<string, { lessonTitle: string; courseTitle: string; sentences: Map<string, string> }>();
+  for (const course of courses) {
+    for (const lesson of course.lessons) {
+      lessonIndex.set(lesson.id, {
+        lessonTitle: lesson.title,
+        courseTitle: course.title,
+        sentences: new Map(lesson.sentences.map((sentence) => [sentence.id, sentence.text]))
+      });
     }
-  ],
-  progress: {
-    'airport-01': {
-      answers: { 'airport-01-s1': 'I would like to check in for my flight to London' },
-      activeSentenceId: 'airport-01-s2',
-      updatedAt: '2026-09-24T10:10:00.000Z'
+  }
+
+  const attempts = Array.isArray(legacy.attempts) ? structuredClone(legacy.attempts) : [];
+  for (const attempt of attempts) {
+    const ref = lessonIndex.get(attempt.lessonId);
+    if (!ref) continue;
+    for (const sentenceAttempt of attempt.sentenceAttempts) {
+      const currentText = ref.sentences.get(sentenceAttempt.sentenceId);
+      if (currentText === undefined) {
+        sentenceAttempt.stale = true;
+      } else if (currentText !== sentenceAttempt.source) {
+        sentenceAttempt.source = currentText;
+        sentenceAttempt.tokens = compareSentence(currentText, sentenceAttempt.answer);
+        sentenceAttempt.score = scoreSentence(sentenceAttempt.tokens);
+        sentenceAttempt.recomputed = true;
+        sentenceAttempt.stale = false;
+      }
     }
-  },
-  activeLessonId: '',
-  activeSentenceId: '',
-  theme: 'light',
-  fontScale: 1,
-  role: 'learner'
-});
+    attempt.score = scoreAttempt(attempt.sentenceAttempts);
+    attempt.lessonTitle = ref.lessonTitle;
+    attempt.courseTitle = ref.courseTitle;
+    attempt.lessonHash = lessonHashes[attempt.lessonId];
+  }
+
+  return {
+    ...fresh,
+    courses,
+    lessonHashes,
+    attempts,
+    progress: (legacy.progress ?? {}) as PersistedState['progress'],
+    activeLessonId: typeof legacy.activeLessonId === 'string' ? legacy.activeLessonId : '',
+    activeSentenceId: typeof legacy.activeSentenceId === 'string' ? legacy.activeSentenceId : '',
+    theme: legacy.theme === 'dark' ? 'dark' : 'light',
+    fontScale: typeof legacy.fontScale === 'number' ? legacy.fontScale : 1,
+    role: legacy.role === 'teacher' ? 'teacher' : 'learner'
+  };
+}

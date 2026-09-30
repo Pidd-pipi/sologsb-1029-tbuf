@@ -1,4 +1,5 @@
 import type { SentenceAttempt, TextSegment, TokenResult } from './types';
+import type { Lesson } from './types';
 
 export const segmentText = (text: string): TextSegment[] => {
   const matches = text.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*|[^\s\p{L}\p{N}]+/gu) ?? [];
@@ -76,9 +77,51 @@ export function compareSentence(expected: string, answer: string): TokenResult[]
   return result.map((token, index) => ({ ...token, index }));
 }
 
+export function scoreSentence(tokens: TokenResult[]): number {
+  if (!tokens.length) return 0;
+  return Math.round((tokens.filter((token) => token.correct).length / tokens.length) * 100);
+}
+
 export function scoreAttempt(sentenceAttempts: SentenceAttempt[]): number {
   const totals = sentenceAttempts.flatMap((attempt) => attempt.tokens);
   if (!totals.length) return 0;
   const correct = totals.filter((token) => token.correct).length;
   return Math.max(0, Math.round((correct / totals.length) * 100));
+}
+
+/**
+ * 课程版本指纹：只由句子 id 与原文决定，句子文本一变，指纹就变。
+ * 不包含 downloaded 等仅本机的标记。
+ */
+export function lessonFingerprint(lesson: Lesson): string {
+  const raw = lesson.sentences.map((sentence) => `${sentence.id}${sentence.text}`).join('');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `lh-${(hash + raw.length).toString(36)}`;
+}
+
+/** 生成设备号：一次安装长期固定。 */
+export function createDeviceId(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `dev-${Date.now().toString(36)}-${rand}`;
+}
+
+/**
+ * 课程内容升级后，用保存下来的答案重新比对一句。
+ * 用户原有的错词分类/错因不自动沿用（分类指向的可能已不是同一处错误）。
+ */
+export function recomputeSentenceAttempt(attempt: SentenceAttempt, currentText: string): SentenceAttempt {
+  if (attempt.source === currentText) return attempt;
+  const tokens = compareSentence(currentText, attempt.answer);
+  return {
+    ...attempt,
+    source: currentText,
+    tokens,
+    score: scoreSentence(tokens),
+    recomputed: true,
+    stale: false
+  };
 }

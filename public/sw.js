@@ -1,4 +1,4 @@
-const CACHE_NAME = 'echo-step-shell-v1';
+const CACHE_NAME = 'echo-step-shell-v2';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
