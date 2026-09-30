@@ -26,6 +26,8 @@ export interface Course {
   description: string;
   level: string;
   accent: string;
+  /** Content version; bumped when sentence text/ids change so imports can invalidate stale results. */
+  version: number;
   lessons: Lesson[];
 }
 
@@ -63,8 +65,62 @@ export interface LessonProgress {
   updatedAt: string;
 }
 
+/**
+ * A single synced change. Every mergeable mutation is recorded as an append-only
+ * op tagged with the originating device and a per-device monotonic sequence number.
+ * The op id (`${deviceId}:${seq}`) is globally unique and makes repeated imports idempotent.
+ */
+export interface BaseOp {
+  id: string;
+  deviceId: string;
+  seq: number;
+  createdAt: string;
+}
+
+export type Op =
+  | (BaseOp & { type: 'draft'; lessonId: string; sentenceId: string; answer: string })
+  | (BaseOp & { type: 'classification'; attemptId: string; sentenceId: string; tokenIndex: number; category: ErrorCategory; reason: string })
+  | (BaseOp & { type: 'feedback'; attemptId: string; feedback: string })
+  | (BaseOp & { type: 'attempt'; attempt: PracticeAttempt })
+  | (BaseOp & { type: 'download'; lessonId: string; downloaded: boolean });
+
+/** A conflict surfaced to the user when both sides changed the same field differently. */
+export interface Conflict {
+  id: string;
+  kind: 'draft' | 'classification';
+  label: string;
+  localValue: string;
+  incomingValue: string;
+  /** Exact resolution payloads (display strings are lossy for category+reason). */
+  localAnswer?: string;
+  incomingAnswer?: string;
+  localCategory?: ErrorCategory;
+  localReason?: string;
+  incomingCategory?: ErrorCategory;
+  incomingReason?: string;
+  /** Target coordinates used when applying the resolution. */
+  lessonId?: string;
+  sentenceId?: string;
+  attemptId?: string;
+  tokenIndex?: number;
+  resolution?: 'local' | 'incoming';
+}
+
+/** The portable handover record exported from one device and imported on another. */
+export interface HandoverRecord {
+  schemaVersion: 2;
+  deviceId: string;
+  exportedAt: string;
+  courses: Course[];
+  attempts: PracticeAttempt[];
+  progress: Record<string, LessonProgress>;
+  opLog: Op[];
+  appliedOps: string[];
+}
+
 export interface PersistedState {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  deviceId: string;
   courses: Course[];
   attempts: PracticeAttempt[];
   progress: Record<string, LessonProgress>;
@@ -73,6 +129,10 @@ export interface PersistedState {
   theme: ThemeMode;
   fontScale: number;
   role: 'learner' | 'teacher';
+  /** Append-only change log; source of truth for idempotent import and conflict detection. */
+  opLog: Op[];
+  /** Op ids already applied to this device, so re-importing the same record is a no-op. */
+  appliedOps: string[];
 }
 
 export interface TextSegment {

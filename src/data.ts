@@ -7,6 +7,7 @@ export const demoCourses: Course[] = [
     description: '围绕值机、安检、问路和登机场景进行短句听写。',
     level: 'A2',
     accent: '#1769e0',
+    version: 1,
     lessons: [
       {
         id: 'airport-01',
@@ -45,6 +46,7 @@ export const demoCourses: Course[] = [
     description: '练习会议中的观点确认、追问和行动项复述。',
     level: 'B1',
     accent: '#7a3dc4',
+    version: 1,
     lessons: [
       {
         id: 'meeting-01',
@@ -64,8 +66,9 @@ export const demoCourses: Course[] = [
   }
 ];
 
-export const createInitialState = (): PersistedState => ({
-  schemaVersion: 1,
+export const createInitialState = (deviceId = ''): PersistedState => ({
+  schemaVersion: 2,
+  deviceId,
   courses: structuredClone(demoCourses),
   attempts: [
     {
@@ -110,5 +113,7 @@ export const createInitialState = (): PersistedState => ({
   activeSentenceId: '',
   theme: 'light',
   fontScale: 1,
-  role: 'learner'
+  role: 'learner',
+  opLog: [],
+  appliedOps: []
 });

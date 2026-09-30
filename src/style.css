@@ -122,6 +122,25 @@ button, input, textarea { font: inherit; }
 .segmented button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 5px rgb(0 0 0 / .09); font-weight: 700; }
 .empty-state { text-align: center; padding: 36px 20px; color: var(--muted); }
 .empty-state strong { display: block; color: var(--text); margin-bottom: 7px; }
+.handover-panel { display: flex; flex-direction: column; gap: 14px; }
+.handover-tip { margin: 0; font-size: .72rem; line-height: 1.6; color: var(--muted); }
+.handover-block { border-top: 1px solid var(--line); padding-top: 12px; }
+.handover-block strong { font-size: .82rem; }
+.handover-block p { margin: 4px 0 8px; font-size: .7rem; color: var(--muted); line-height: 1.5; }
+.handover-code { width: 100%; min-height: 84px; resize: vertical; border: 1.5px solid var(--line); border-radius: 13px; padding: 11px; background: var(--soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .66rem; line-height: 1.5; word-break: break-all; }
+.handover-code:focus { outline: none; border-color: var(--primary); }
+.conflict-list { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.conflict-list > strong { font-size: .82rem; }
+.conflict-card { border: 1px solid var(--line); border-radius: 13px; padding: 11px; background: var(--soft); }
+.conflict-label { margin: 0 0 8px; font-size: .74rem; font-weight: 700; }
+.conflict-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.conflict-option { border: 1.5px solid var(--line); background: var(--card); color: var(--text); border-radius: 11px; padding: 9px 10px; cursor: pointer; text-align: left; display: flex; flex-direction: column; gap: 3px; }
+.conflict-option span { font-size: .72rem; font-weight: 700; color: var(--primary); }
+.conflict-option small { font-size: .64rem; color: var(--muted); line-height: 1.4; word-break: break-all; }
+.conflict-option.active { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+.handover-actions { margin-top: 4px; }
+.handover-message { margin: 0; padding: 10px 12px; border-radius: 11px; background: #e9f8f2; color: #126c50; font-size: .72rem; line-height: 1.5; }
+.handover-message.error { background: #fff0f0; color: var(--danger); }
 @media (min-width: 600px) {
   body { padding: 18px 0; }
   .app-shell { min-height: calc(100dvh - 36px); border-radius: 28px; }

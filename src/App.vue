@@ -1,7 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { courseForLesson, exportRecords, lessonById, persist, saveAttempt, setDownloaded, state, updateTokenClassification } from './store';
-import type { ErrorCategory, Lesson, PracticeAttempt, PracticeView } from './types';
+import {
+  cancelPendingImport,
+  commitResolvedImport,
+  courseForLesson,
+  exportHandoverCode,
+  exportRecords,
+  importHandoverCode,
+  lessonById,
+  persist,
+  recordDraftChange,
+  recordFeedbackChange,
+  saveAttempt,
+  setDownloaded,
+  state,
+  updateTokenClassification,
+} from './store';
+import type { Conflict, ErrorCategory, Lesson, PracticeAttempt, PracticeView } from './types';
 import { compareSentence, scoreAttempt, segmentText } from './utils';
 
 const view = ref<PracticeView>(state.activeLessonId ? 'practice' : 'library');
@@ -14,6 +29,13 @@ const segmentEnd = ref(1);
 const teacherAttemptId = ref(state.attempts[0]?.id ?? '');
 const teacherDraft = ref(state.attempts[0]?.teacherFeedback ?? '');
 let toastTimer = 0;
+
+// Handover (交接) state
+const showHandover = ref(false);
+const exportedCode = ref('');
+const importCode = ref('');
+const importMessage = ref('');
+const pendingConflicts = ref<Conflict[]>([]);
 
 const activeLesson = computed(() => lessonById(state.activeLessonId));
 const activeCourse = computed(() => activeLesson.value ? courseForLesson(activeLesson.value.id) : undefined);
@@ -63,6 +85,7 @@ watch(currentAnswer, (value) => {
   progress.activeSentenceId = sentence.id;
   progress.updatedAt = new Date().toISOString();
   state.progress[lesson.id] = progress;
+  recordDraftChange(lesson.id, sentence.id, value);
 });
 
 watch(activeLesson, (lesson) => {
@@ -186,6 +209,7 @@ function saveTeacherFeedback() {
   const attempt = teacherAttempt.value;
   if (!attempt) return;
   attempt.teacherFeedback = teacherDraft.value.trim();
+  recordFeedbackChange(attempt.id, attempt.teacherFeedback);
   persist();
   notify('教师反馈已保存');
 }
@@ -207,6 +231,90 @@ function downloadRecords() {
   anchor.click();
   URL.revokeObjectURL(url);
   notify('练习记录已导出');
+}
+
+// --- Handover (交接码) export / import ---
+
+function toggleHandover() {
+  showHandover.value = !showHandover.value;
+  if (showHandover.value) {
+    exportedCode.value = '';
+    importCode.value = '';
+    importMessage.value = '';
+    pendingConflicts.value = [];
+  }
+}
+
+function doExportHandover() {
+  try {
+    exportedCode.value = exportHandoverCode();
+    notify('交接码已生成，可复制到另一台设备导入');
+  } catch {
+    notify('生成交接码失败，请重试');
+  }
+}
+
+async function copyExportedCode() {
+  if (!exportedCode.value) return;
+  try {
+    await navigator.clipboard.writeText(exportedCode.value);
+    notify('交接码已复制');
+  } catch {
+    notify('复制失败，请手动选择文本复制');
+  }
+}
+
+function doImportHandover() {
+  const code = importCode.value.trim();
+  if (!code) {
+    importMessage.value = '请粘贴交接码';
+    return;
+  }
+  const outcome = importHandoverCode(code);
+  if (!outcome.ok) {
+    importMessage.value = outcome.error ?? '导入失败，已恢复原记录';
+    pendingConflicts.value = [];
+    notify('导入失败，已恢复原记录');
+    return;
+  }
+  if (outcome.conflicts && outcome.conflicts.length) {
+    pendingConflicts.value = outcome.conflicts;
+    importMessage.value = `检测到 ${outcome.conflicts.length} 处冲突，请选择保留哪台设备的版本`;
+    return;
+  }
+  importMessage.value = '合并完成，结果已写入本机';
+    pendingConflicts.value = [];
+  notify('交接记录已合并');
+}
+
+function chooseConflict(conflictId: string, resolution: 'local' | 'incoming') {
+  const conflict = pendingConflicts.value.find((item) => item.id === conflictId);
+  if (conflict) conflict.resolution = resolution;
+}
+
+function commitImport() {
+  const unresolved = pendingConflicts.value.filter((conflict) => !conflict.resolution);
+  if (unresolved.length) {
+    importMessage.value = `还有 ${unresolved.length} 处冲突未选择`;
+    return;
+  }
+  const outcome = commitResolvedImport();
+  if (!outcome.ok) {
+    importMessage.value = outcome.error ?? '导入失败，已恢复原记录';
+    pendingConflicts.value = [];
+    notify('导入失败，已恢复原记录');
+    return;
+  }
+  pendingConflicts.value = [];
+  importCode.value = '';
+  importMessage.value = '合并完成，结果已写入本机';
+  notify('交接记录已合并');
+}
+
+function cancelImport() {
+  cancelPendingImport();
+  pendingConflicts.value = [];
+  importMessage.value = '已取消导入，原记录未改动';
 }
 
 function formatDate(value: string): string {
@@ -268,6 +376,50 @@ onBeforeUnmount(() => {
           <span>{{ online ? '● 在线 · 数据已保存到本机' : '● 离线模式 · 可继续已下载课程' }}</span>
           <span>{{ online ? '本地优先存储' : '恢复网络后继续保存' }}</span>
         </div>
+
+        <div class="section-head">
+          <h3>交接合并</h3>
+          <var-button size="small" type="primary" variant="outline" @click="toggleHandover">{{ showHandover ? '收起' : '交接码导出/导入' }}</var-button>
+        </div>
+        <section v-if="showHandover" class="panel handover-panel">
+          <p class="handover-tip">手机和平板轮流离线听写时，用交接码合并两边的答案、错因和反馈。每项改动都带设备号和序号，重复导入不会重复生效；不同句子自动并合，同一句草稿或同一错词分类两边都改过时会列出供选择。</p>
+          <div class="handover-block">
+            <strong>导出交接码</strong>
+            <p>把本机当前记录生成交接码，发到另一台设备导入。</p>
+            <var-button block type="primary" variant="outline" @click="doExportHandover">生成交接码</var-button>
+            <textarea v-if="exportedCode" :value="exportedCode" readonly class="handover-code" aria-label="交接码" @click="copyExportedCode"></textarea>
+            <var-button v-if="exportedCode" block size="small" type="default" variant="outline" style="margin-top:8px" @click="copyExportedCode">复制交接码</var-button>
+          </div>
+          <div class="handover-block">
+            <strong>导入交接码</strong>
+            <p>粘贴另一台设备的交接码，合并到本机。合并前会校验容量，容量不足会拒绝并保留原记录；课程版本变化会重算受影响错词，找不到原句会停止写入。</p>
+            <textarea v-model="importCode" class="handover-code" placeholder="粘贴交接码..." aria-label="导入的交接码"></textarea>
+            <var-button block type="primary" @click="doImportHandover">导入并合并</var-button>
+          </div>
+
+          <div v-if="pendingConflicts.length" class="conflict-list">
+            <strong>选择冲突版本（共 {{ pendingConflicts.length }} 处）</strong>
+            <div v-for="conflict in pendingConflicts" :key="conflict.id" class="conflict-card">
+              <p class="conflict-label">{{ conflict.label }}</p>
+              <div class="conflict-options">
+                <button class="conflict-option" :class="{ active: conflict.resolution === 'local' }" @click="chooseConflict(conflict.id, 'local')">
+                  <span>本机</span>
+                  <small>{{ conflict.localValue }}</small>
+                </button>
+                <button class="conflict-option" :class="{ active: conflict.resolution === 'incoming' }" @click="chooseConflict(conflict.id, 'incoming')">
+                  <span>交接码</span>
+                  <small>{{ conflict.incomingValue }}</small>
+                </button>
+              </div>
+            </div>
+            <div class="handover-actions">
+              <var-button block type="primary" @click="commitImport">确认合并</var-button>
+              <var-button block type="default" variant="outline" style="margin-top:8px" @click="cancelImport">取消（恢复原记录）</var-button>
+            </div>
+          </div>
+
+          <p v-if="importMessage" class="handover-message" :class="{ error: importMessage.includes('失败') || importMessage.includes('不足') || importMessage.includes('未选择') }">{{ importMessage }}</p>
+        </section>
 
         <div class="section-head">
           <h3>课程库</h3>
